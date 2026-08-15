@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+
+# Secrets
+.env
+*.env
+
+# Node / Expo
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Models / VLM cache
+*.pt
+.vlm_cache/
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
