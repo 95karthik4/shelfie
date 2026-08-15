@@ -216,58 +216,168 @@ An honest README scores better than a broken feature presented as finished.
 # FROZEN ARCHITECTURE — do not redesign, implement exactly this
 
 ## Pipeline
+
 Expo app → POST image → Django REST → local detector → quality gate
 → (fallback: OpenCV vertical-edge segmentation if gate fails)
 → spine crops → ONE hosted VLM call (multi-image, indexed) → matcher
 → response {auto, review, unmatched} → Expo review flow → SQLite library.
 
 ## Detector
-- YOLO-World via ultralytics, set_classes(["book spine"]), model loaded ONCE at module import.
-- Benchmark YOLOv8n-COCO vs YOLO-World on committed test photos; report boxes found + CPU latency. Never claim unmeasured numbers.
-- Quality gate: quality = 0.40*mean_confidence + 0.30*plausible_box_ratio + 0.30*coverage_score; if quality < 0.55 → OpenCV fallback. Threshold tunable.
+
+* YOLO-World via ultralytics, set_classes(["book spine"]), model loaded ONCE at module import.
+* Benchmark YOLOv8n-COCO vs YOLO-World on committed test photos; report boxes found + CPU latency. Never claim unmeasured numbers.
+* Quality gate: quality = 0.40*mean_confidence + 0.30*plausible_box_ratio + 0.30*coverage_score; if quality < 0.55 → OpenCV fallback. Threshold tunable.
 
 ## VLM (backend/vision/vlm.py)
-- ONE public function: read_spines(crops: list) -> list[dict].
-- Single request, multiple images, text labels SPINE 0, SPINE 1, ...
-- Strict JSON response contract: [{"index": int, "title": str|null, "author": str|null, "legible": bool}]
-- Timeout → structured error return. Malformed JSON → one retry ("return valid JSON only") → structured error. Missing index → that spine marked legible:false, NEVER silently dropped.
+
+### Provider
+
+* Provider: Google Gemini via the Gemini Developer API free tier.
+* Use the official Google GenAI SDK (`google-genai`).
+* Model ID is loaded from the `GEMINI_MODEL` environment variable and is NEVER hardcoded in application code.
+* API key is loaded from the `GEMINI_API_KEY` environment variable and is NEVER committed to Git.
+* Local secrets may be stored in `.env`, which is gitignored.
+* Never place the real API key in `CLAUDE.md`, `README.md`, source code, tests, Git history, or committed configuration.
+
+### Public interface
+
+* ONE public function: `read_spines(crops: list) -> list[dict]`.
+* All Gemini/provider-specific calls must remain behind `read_spines()`.
+* The rest of the application must not depend directly on Gemini SDK objects.
+
+### Request strategy
+
+* Send the detected spine crops in ONE hosted request when supported.
+* Associate every input crop with an explicit index:
+
+  * SPINE 0
+  * SPINE 1
+  * SPINE 2
+  * etc.
+* Never rely only on the order of model output to associate a result with a crop.
+
+### Structured response
+
+Use Gemini structured JSON output/schema where supported.
+
+Expected logical response contract:
+
+```json
+[
+  {
+    "index": 0,
+    "title": "Dune",
+    "author": "Frank Herbert",
+    "legible": true
+  },
+  {
+    "index": 1,
+    "title": null,
+    "author": null,
+    "legible": false
+  }
+]
+```
+
+Required fields:
+
+* `index`: integer identifying the original spine crop
+* `title`: string or null
+* `author`: string or null
+* `legible`: boolean
+
+Even when structured-output/schema support is used, validate the returned data defensively.
+
+### Missing results
+
+* If Gemini omits an expected crop index, NEVER silently drop that spine.
+* Create an unresolved result for that index.
+* Mark it `legible: false` or return an equivalent structured unresolved/error state.
+* Every input crop must remain accounted for.
+
+### Malformed output
+
+* Validate the response before using it.
+* If the response is malformed, perform ONE controlled retry requesting valid structured output.
+* If the retry also fails, return a structured error/unresolved state.
+* Never allow malformed VLM output to crash the pipeline.
+
+### API failure handling
+
+* Handle transient API failures such as HTTP 429, 408, and appropriate 5xx failures with bounded exponential backoff and jitter.
+* Retry only a small bounded number of times.
+* Do not retry permanent failures indefinitely.
+* Invalid credentials, invalid requests, or other permanent client errors should return a structured error state.
+* Never create an infinite retry loop.
+
+### Development cache
+
+* Cache successful VLM responses under `backend/.vlm_cache/` during development.
+* Cache entries should be keyed using an image/request hash so repeated development runs do not unnecessarily call the hosted API.
+* Include enough request context in the cache key to avoid accidentally reusing stale results after meaningful model/prompt changes.
+* `.vlm_cache/` must remain gitignored.
+* Cache behavior is a development optimization only; correctness must not depend on cached results.
+
+### Cost and measurements
+
+* Development may use Gemini's available free-tier quota.
+* README must still report measured VLM latency.
+* README must report actual observed development spend accurately.
+* README should also estimate equivalent per-image API cost using measured request usage and the provider's published paid pricing when practical.
+* Never claim latency, token usage, request cost, or other measurements that were not actually measured.
 
 ## Catalog schema (catalog.csv)
+
 catalog_id, work_id, title, author, alternate_titles, author_aliases, edition, contains_work_ids, notes
-- Same work, two editions → same work_id, different edition.
-- Same title, different books → different work_id.
-- Omnibus row lists component work_ids in contains_work_ids.
+
+* Same work, two editions → same work_id, different edition.
+* Same title, different books → different work_id.
+* Omnibus row lists component work_ids in contains_work_ids.
 
 ## Matcher (backend/matching/ — PURE PYTHON, ZERO Django imports)
+
 Normalization (information-preserving — never destroy info):
-- Unicode NFKD, strip accents, casefold, punctuation→spaces, collapse whitespace, "&"→"and".
-- NO stopword removal. Leading-article handling happens in scoring: compare query both with and without leading article, take best.
-- Authors: also reorder "Last, First" → "first last", collapse initials ("J.K." → "j k"). Keep originals for display.
+
+* Unicode NFKD, strip accents, casefold, punctuation→spaces, collapse whitespace, "&"→"and".
+* NO stopword removal.
+* Leading-article handling happens in scoring: compare query both with and without leading article, take best.
+* Authors: also reorder "Last, First" → "first last", collapse initials ("J.K." → "j k").
+* Keep originals for display.
 
 Scoring per catalog entry:
-- T = best rapidfuzz token_set_ratio over {canonical title + all alternate_titles} × {query, query-minus-leading-article}, scaled 0–1.
-- Substring guard: if one normalized title is a proper substring of the other, apply penalty UNLESS exact alias match. No length-ratio exemption.
-- Author readable: S = 0.75*T + 0.25*A (A = token_sort_ratio on normalized authors/aliases).
-- Author unreadable: S = T, and FINAL confidence is capped at 0.84. (Consequence: title-only reads can never reach AUTO_READY at threshold 0.85 — intentional.)
+
+* T = best rapidfuzz token_set_ratio over {canonical title + all alternate_titles} × {query, query-minus-leading-article}, scaled 0–1.
+* Substring guard: if one normalized title is a proper substring of the other, apply penalty UNLESS exact alias match.
+* No length-ratio exemption.
+* Author readable: S = 0.75*T + 0.25*A (A = token_sort_ratio on normalized authors/aliases).
+* Author unreadable: S = T, and FINAL confidence is capped at 0.84.
+* Consequence: title-only reads can never reach AUTO_READY at threshold 0.85 — intentional.
 
 Ambiguity (margin window Δ < 0.15) — check in THIS order, worst wins.
+
 IMPORTANT: compare rank-1 against the best-scoring candidate OF EACH RELATION TYPE within the margin, not blindly against rank-2:
+
 1. Best DIFFERENT-work candidate within margin → penalty −0.30, reason DIFFERENT_WORK_AMBIGUITY
 2. Else omnibus/contained relation within margin → penalty −0.15, reason OMNIBUS_AMBIGUITY
 3. Else same-work candidate within margin → penalty −0.05, reason EDITION_AMBIGUITY
 
 Status routing — ambiguity ALWAYS forces review, regardless of score:
+
 if any ambiguity reason present → REVIEW
 elif confidence >= 0.85 → AUTO_READY
 elif confidence >= 0.60 → REVIEW
 else → UNMATCHED
+
 Thresholds are provisional; tune against tests and document the tuning.
 
 Output contract per book:
-{catalog_id, work_id, confidence, status, reasons: [...], runner_up: {catalog_id, work_id, title, author, score}, raw_title, raw_author}
+
+`{catalog_id, work_id, confidence, status, reasons: [...], runner_up: {catalog_id, work_id, title, author, score}, raw_title, raw_author}`
+
 Confidence is "an explainable decision score, not a calibrated probability" — README states this.
 
 ## The 13 required tests (backend/matching/tests/test_matcher.py)
+
 1. Exact title + exact author → high confidence, AUTO_READY
 2. Minor OCR typo in title → still matches
 3. US/UK alternate title → correct same work
@@ -283,11 +393,14 @@ Confidence is "an explainable decision score, not a calibrated probability" — 
 13. Three same-work editions clustered high + one different-work candidate inside margin → DIFFERENT_WORK_AMBIGUITY (−0.30) wins, NOT edition-level
 
 ## Build rules
-- Commit after every component. Meaningful messages. Never one giant commit.
-- All VLM calls behind read_spines() only.
-- Ask before adding any dependency not listed: django, djangorestframework, ultralytics, opencv-python, rapidfuzz, pytest, openai.
-- Never claim a number in README that wasn't measured on the committed test photos.
-- Every failure path returns structured JSON, never an unhandled 500.
 
+* Commit after every component. Meaningful messages. Never one giant commit.
+* All VLM calls behind `read_spines()` only.
+* Ask before adding any dependency not already agreed.
+* Agreed dependencies currently include: django, djangorestframework, ultralytics, opencv-python, rapidfuzz, pytest, and google-genai.
+* Do NOT add the OpenAI SDK unless the VLM provider decision changes later.
+* Never claim a number in README that wasn't measured on the committed test photos.
+* Never commit API keys, `.env` files, credentials, model weights, VLM cache contents, or other secrets/generated artifacts.
+* Every failure path returns structured JSON, never an unhandled 500.
 
 
