@@ -224,11 +224,16 @@ Expo app → POST image → Django REST → local detector → quality gate
 
 ## Detector
 
-* YOLO-World via ultralytics, set_classes(["book spine"]), model loaded ONCE at module import.
-* Benchmark YOLOv8n-COCO vs YOLO-World on committed test photos; report boxes found + CPU latency. Never claim unmeasured numbers.
+* SUPERSEDED BY MEASUREMENT: the original plan was YOLO-World via ultralytics with
+  set_classes(["book spine"]). Benchmarking both on the committed test photos showed
+  YOLOv8n-COCO (filtered to its stock "book" class) found far more boxes per image at
+  comparable CPU latency, and its boxes were predominantly individual spines rather than
+  whole-shelf blobs. **YOLOv8n-COCO is the shipped runtime detector**; YOLO-World remains
+  in backend/vision/benchmark.py as the historical comparison only.
+* Model loaded ONCE at module import. Never claim unmeasured numbers.
 * Quality gate: quality = 0.40*mean_confidence + 0.30*plausible_box_ratio + 0.30*coverage_score; if quality < 0.55 → OpenCV fallback. Threshold tunable.
 
-## VLM (backend/vision/vlm.py)
+## VLM (shipped at backend/vlm/ — package, not backend/vision/vlm.py)
 
 ### Provider
 
