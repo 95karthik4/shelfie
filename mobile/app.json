@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Shelfie",
+    "slug": "shelfie",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.shelfie.app"
+    },
+    "android": {
+      "package": "com.shelfie.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Shelfie uses the camera so you can photograph a bookshelf."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Shelfie needs access to your photos so you can pick an existing bookshelf photo."
+        }
+      ]
+    ]
+  }
+}
