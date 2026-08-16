@@ -55,6 +55,15 @@ the app**:
 | Android emulator | `http://10.0.2.2:8000` |
 | Physical phone, same Wi-Fi | `http://<your-mac-LAN-IP>:8000` (`ipconfig getifaddr en0`) |
 
+`mobile/.env.example` also sets **`EXPO_PUBLIC_USE_RN_FETCH=1`, which is
+required, not optional.** Expo SDK 57 installs its own WinterCG `fetch` as the
+global `fetch` on iOS and Android, and that implementation accepts only
+strings, `Blob`s, or objects with a `bytes()` method as form parts. React
+Native's standard file part — `{ uri, name, type }` — therefore throws
+`Unsupported FormDataPart implementation`, and the photo upload fails on the
+device before any request is sent. The flag restores React Native's built-in
+`fetch`, which handles that shape. Without it, `POST /api/scans/` cannot work.
+
 `EXPO_PUBLIC_*` variables are inlined at bundle time, so restart with `-c`
 after changing `.env`.
 
@@ -205,6 +214,34 @@ statement was inspected.
 Caveats: cost scales with crop count and crop size, and this is **one
 measurement of one photo**, not an average over the eight test photos.
 
+### Real-device run (physical Android, over the internet)
+
+The whole flow was also run from a **physical Android phone on a different
+network**, reaching this machine through temporary HTTPS tunnels — a real
+camera photo of a real bookshelf, not a committed test image.
+
+| | |
+|---|---|
+| Detected spines | 15 |
+| `POST /api/scans/` | **201 Created**, **22.57 s** end to end |
+| Gemini VLM latency | 19,059 ms, 1 hosted request, cache miss |
+| Detector | `yolov8n_coco`, quality 0.763, no fallback |
+| Results | **1 high-confidence, 13 review, 1 unmatched** |
+| Confirm | `POST /api/scan-items/38/confirm/` → **201**, persisted *The Da Vinci Code* / *Dan Brown* from catalog row 51 |
+| Discard | No request made, no `ConfirmedBook` row, item still `confirmed=False` |
+| Library | `GET /api/library/` returned exactly that one confirmed book |
+
+Re-running **the identical photo** hit the development VLM cache: same crops →
+same cache key → **`cache_hit=True`, zero hosted requests, 1.19 s** for the
+whole request instead of 22.57 s. The detector still ran; only the hosted call
+was skipped.
+
+Two things this run confirms beyond the numbers: the human-in-the-loop
+boundary held under real use (15 books scanned, one confirmed by an explicit
+tap, one discarded with no server trace, thirteen left waiting), and the
+`REVIEW`-vs-`UNMATCHED` limitation in §9 reproduced independently on a
+different shelf.
+
 ---
 
 ## 4. The catalog
@@ -333,19 +370,29 @@ venv/bin/python manage.py test api                      # 27
 
 ## 9. Known limitations
 
-### Physical iOS runtime was not completed
+### Physical iOS runtime is unverified (Android is verified)
 
-The app **type-checks, passes `expo-doctor` 21/21, and bundles for iOS**
-(603 modules), but it has never rendered on a device. Two independent blockers:
+**Android: verified on real hardware** — see §3.4. Camera, capture, upload,
+review and library persistence all ran on a physical Android phone.
+
+**iOS: never run on a device.** The app type-checks, passes `expo-doctor`
+21/21 and bundles for iOS (603 modules), but two blockers stopped a physical
+iOS run:
 
 1. The App Store build of Expo Go does not currently run **SDK 57**.
 2. This Mac has **Command Line Tools only — no Xcode and no iOS SDK**, and a
    local development build needs both (plus Developer Mode on the phone). At
    ~40 GB and hours of setup, that did not fit the deadline.
 
-So camera permissions, real capture, and the multipart upload from iOS are
-**unverified**. The API side of that path *is* verified — a real photo went
-through the real endpoint end to end (§3).
+Since both platforms share the same JavaScript and the same `expo-camera` /
+`expo-image-picker` APIs, the Android run exercises the same code paths — but
+iOS-specific behaviour (permission prompts, its multipart implementation) is
+genuinely untested.
+
+One path was **not** tested on hardware either: correcting a match to a
+different catalog entry, and manual title/author entry. Only
+accept-the-suggestion and discard were exercised on the device. Both
+untested paths are covered by the API test suite (§8).
 
 ### Low-scoring books are routed to REVIEW rather than UNMATCHED
 
