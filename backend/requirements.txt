@@ -1,0 +1,32 @@
+# Direct dependencies only, pinned to the versions this project was built and
+# measured against. Transitive dependencies (torch, httpx, pydantic, ...) are
+# resolved by pip and deliberately not pinned here.
+#
+#   python3 -m venv backend/venv
+#   backend/venv/bin/pip install -r backend/requirements.txt
+
+# --- Web API ---
+Django==6.1
+djangorestframework==3.18.0
+
+# --- Local vision stage (CPU) ---
+# ultralytics ships the YOLOv8n weights loader; opencv does the cropping and
+# the vertical-edge fallback segmentation.
+ultralytics==8.4.120
+opencv-python==5.0.0.93
+numpy==2.5.2
+
+# --- Hosted VLM stage ---
+google-genai==2.18.1
+
+# --- Matching ---
+rapidfuzz==3.14.5
+
+# --- Image handling ---
+# Required by DRF's ImageField (upload validation) and by the API tests.
+pillow==12.3.0
+
+# --- Tests ---
+# The matcher and VLM suites run under pytest; the API suite runs under
+# Django's own test runner (manage.py test api), which needs no extra package.
+pytest==9.1.1
